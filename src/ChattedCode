@@ -1,0 +1,199 @@
+#include <SPI.h>
+
+// =============================
+// YOUR SCHEMATIC
+// =============================
+
+const int CS_PIN   = 33;
+const int SCK_PIN  = 5;
+const int MOSI_PIN = 19;
+const int MISO_PIN = 21;
+
+
+// =============================
+// IIS3DWB REGISTERS
+// =============================
+
+const byte WHO_AM_I = 0x0F;
+const byte CTRL1_XL = 0x10;
+const byte CTRL3_C  = 0x12;
+
+const byte OUTX_L_A = 0x28;
+
+
+// SPI communication settings
+SPISettings accelSPI(1000000, MSBFIRST, SPI_MODE0);
+
+
+// =============================
+// WRITE REGISTER
+// =============================
+
+void writeRegister(byte reg, byte value)
+{
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Write command
+  SPI.transfer(reg & 0x7F);
+
+  SPI.transfer(value);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+}
+
+
+// =============================
+// READ REGISTER
+// =============================
+
+byte readRegister(byte reg)
+{
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Bit 7 = 1 means read
+  SPI.transfer(reg | 0x80);
+
+  byte value = SPI.transfer(0x00);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+
+  return value;
+}
+
+
+// =============================
+// READ X Y Z
+// =============================
+
+void readAcceleration(float &x, float &y, float &z)
+{
+  byte data[6];
+
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Start reading at X low byte
+  SPI.transfer(OUTX_L_A | 0x80);
+
+  for (int i = 0; i < 6; i++)
+  {
+    data[i] = SPI.transfer(0x00);
+  }
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+
+
+  // Combine low + high bytes
+  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);
+  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);
+  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);
+
+
+  // ±2 g sensitivity = 0.061 mg/LSB
+  // Convert mg → g
+  const float sensitivity = 0.000061;
+
+  x = rawX * sensitivity;
+  y = rawY * sensitivity;
+  z = rawZ * sensitivity;
+}
+
+
+// =============================
+// SETUP
+// =============================
+
+void setup()
+{
+  Serial.begin(115200);
+
+  delay(1000);
+
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
+
+  pinMode(CS_PIN, OUTPUT);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  delay(100);
+
+
+  // -------------------------
+  // Check sensor identity
+  // -------------------------
+
+  byte id = readRegister(WHO_AM_I);
+
+  Serial.print("WHO_AM_I = 0x");
+  Serial.println(id, HEX);
+
+
+  if (id != 0x7B)
+  {
+    Serial.println("ERROR: IIS3DWB not detected!");
+    while (1)
+    {
+      delay(1000);
+    }
+  }
+
+  Serial.println("IIS3DWB detected!");
+
+
+  // -------------------------
+  // Block Data Update +
+  // automatic register increment
+  // -------------------------
+
+  writeRegister(CTRL3_C, 0x44);
+
+
+  // -------------------------
+  // Enable accelerometer
+  // 3 axes
+  // ±2 g
+  // -------------------------
+
+  writeRegister(CTRL1_XL, 0xA0);
+
+  delay(100);
+}
+
+
+// =============================
+// LOOP
+// =============================
+
+void loop()
+{
+  float x;
+  float y;
+  float z;
+
+  readAcceleration(x, y, z);
+
+  Serial.print("X: ");
+  Serial.print(x, 4);
+  Serial.print(" g");
+
+  Serial.print("   Y: ");
+  Serial.print(y, 4);
+  Serial.print(" g");
+
+  Serial.print("   Z: ");
+  Serial.print(z, 4);
+  Serial.println(" g");
+
+  delay(100);
+}
