@@ -1,3 +1,19 @@
+void writeRegister(byte reg, byte value)
+{
+  SPI.beginTransaction(accelSPI); //Use this setting for the transaction
+
+  digitalWrite(CS_PIN, LOW); //indicate to the accelerometer that we changing something
+
+  // Write command
+  SPI.transfer(reg & 0x7F); //this is the registar to edit
+
+  SPI.transfer(value); //send a command or change settings
+
+  digitalWrite(CS_PIN, HIGH); //indicate to accelerometer we done changing
+
+  SPI.endTransaction(); //end the transaction
+}
+
 void setup()
 {
   Serial.begin(115200);
