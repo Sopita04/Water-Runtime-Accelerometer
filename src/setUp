@@ -1,3 +1,30 @@
+#include <SPI.h>
+
+// =============================
+// YOUR SCHEMATIC PINS
+// =============================
+
+const int CS_PIN   = 33;
+const int SCK_PIN  = 5;
+const int MOSI_PIN = 19;
+const int MISO_PIN = 21;
+
+
+// =============================
+// IIS3DWB REGISTERS 
+// =============================
+
+const byte WHO_AM_I = 0x0F; // sensor id
+const byte CTRL1_XL = 0x10; //accelerometer settings
+const byte CTRL3_C  = 0x12; //general settings
+
+const byte OUTX_L_A = 0x28; // X acceleration
+
+
+// SPI communication settings
+SPISettings accelSPI(1000000, MSBFIRST, SPI_MODE0);
+
+
 void writeRegister(byte reg, byte value)
 {
   SPI.beginTransaction(accelSPI); //Use this setting for the transaction
