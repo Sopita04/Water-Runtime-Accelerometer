@@ -1,1 +1,35 @@
+void readAcceleration(float &x, float &y, float &z)
+{
+  byte data[6];         //Creates array containing 6 bytes (2 for each axes) 
 
+  SPI.beginTransaction(accelSPI);     //Calls back the SPI settings and tells ESP32 that we're about to communicate with Accelerometer using those settings
+
+  digitalWrite(CS_PIN, LOW);       //
+
+  // Start reading at X low byte
+  SPI.transfer(OUTX_L_A | 0x80);
+
+  for (int i = 0; i < 6; i++)
+  {
+    data[i] = SPI.transfer(0x00);
+  }
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+
+
+  // Combine low + high bytes
+  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);
+  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);
+  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);
+
+
+  // ±2 g sensitivity = 0.061 mg/LSB
+  // Convert mg → g
+  const float sensitivity = 0.000061;
+
+  x = rawX * sensitivity;
+  y = rawY * sensitivity;
+  z = rawZ * sensitivity;
+}
