@@ -4,32 +4,32 @@ void readAcceleration(float &x, float &y, float &z)
 
   SPI.beginTransaction(accelSPI);     //Calls back the SPI settings and tells ESP32 that we're about to communicate with Accelerometer using those settings
 
-  digitalWrite(CS_PIN, LOW);       //
+  digitalWrite(CS_PIN, LOW);       //CS (Chip Select) LOW tells IIS3DWB that it wants to communicate with it
 
   // Start reading at X low byte
-  SPI.transfer(OUTX_L_A | 0x80);
+  SPI.transfer(OUTX_L_A | 0x80);    //Telling it to start reading at X-axis low byte
 
-  for (int i = 0; i < 6; i++)
+  for (int i = 0; i < 6; i++)     //Reads the 6 bytes from the accelerometer
   {
     data[i] = SPI.transfer(0x00);
   }
 
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(CS_PIN, HIGH);       //Tells accelerometer its finished communication with it
 
-  SPI.endTransaction();
+  SPI.endTransaction();            //Ends SPI communication
 
 
   // Combine low + high bytes
-  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);
-  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);
-  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);
+  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);     //Combines the two X bytes
+  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);     //Combines the two Y bytes
+  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);     //Combines the two Z bytes
 
 
   // ±2 g sensitivity = 0.061 mg/LSB
   // Convert mg → g
-  const float sensitivity = 0.000061;
+  const float sensitivity = 0.000061;        //The sensors sensitivity
 
-  x = rawX * sensitivity;
-  y = rawY * sensitivity;
-  z = rawZ * sensitivity;
+  x = rawX * sensitivity;     //Converts the X bytes to g
+  y = rawY * sensitivity;     //Converts the Y bytes to g
+  z = rawZ * sensitivity;      //Converts the Z bytes to g
 }
