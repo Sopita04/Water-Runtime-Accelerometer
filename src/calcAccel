@@ -1,8 +1,9 @@
-///EXAMPLE BASIC STRUCTURE////
+// ---------CALCULATE ACCELERATION MAGNITUDE-----------
 
 float calcAcceleration(float x, float y, float z)
 {
-  float accelerationValue = sqrt(x*x + y*y + z*z);
+  // Calculate the magnitude of the 3-axis acceleration vector
+  float accelerationValue = sqrt((x * x) + (y * y) + (z * z));
 
   return accelerationValue;
 }
