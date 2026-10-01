@@ -186,7 +186,7 @@ void loop()
   readAcceleration(x, y, z);
 
 // take in all the acceleration data (xyz) and then output one acceleration value
-  float accelerationValue = finalAcceleration(x, y, z);
+  float accelerationValue = calcAccel(x, y, z);
 
 //Based on acceleration and determined threshold, determine if there is water flow or not
   bool isFlowing = processData(accelerationValue);
