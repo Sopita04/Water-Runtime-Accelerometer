@@ -5,5 +5,7 @@ Design Lead: pkeerasw@pfw.edu. Sub-team members (Sensors): Design Lead: gutie359
 This project uses an accelerometer and an esp32 to detect if water is running through a pipe via vibrations.
 ## Instructions
 src file contains the code.
+
 schematics has the schematics
+
 dataSheets has the data sheets
