@@ -1,1 +1,21 @@
+// =============================
+// PROCESS DATA / FLOW DETECTION
+// =============================
 
+// This is a temporary threshhold, later with more testing on the natural vibrations of the pipes we will adjust or create another subfunciton that adjusts the threshold
+
+const float FLOW_THRESHOLD = 0.008;
+
+bool processData(float accelerationValue)
+{
+  if (accelerationValue >= FLOW_THRESHOLD)
+  {
+    Serial.println("FLOWING");
+    return true;
+  }
+  else
+  {
+    Serial.println("NOT FLOWING");
+    return false;
+  }
+}
