@@ -1,1 +1,58 @@
+import serial
+import matplotlib.pyplot as plt
+
+# Change COM4 if your ESP32 uses a different port
+ser = serial.Serial("COM4", 115200, timeout=2)
+
+# Enable interactive plotting
+plt.ion()
+
+fig, ax = plt.subplots()
+line, = ax.plot([], [])
+
+ax.set_xlabel("Frequency (Hz)")
+ax.set_ylabel("FFT Magnitude")
+ax.set_title("ESP32 Accelerometer FFT")
+ax.grid(True)
+
+frequencies = []
+magnitudes = []
+collecting = False
+
+while plt.fignum_exists(fig.number):
+
+    text = ser.readline().decode(
+        errors="ignore"
+    ).strip()
+
+    if text == "FFT_START":
+        frequencies = []
+        magnitudes = []
+        collecting = True
+
+    elif text == "FFT_END" and collecting:
+        collecting = False
+
+        if frequencies:
+            line.set_data(frequencies, magnitudes)
+
+            ax.set_xlim(0, 1000)
+            ax.set_ylim(
+                0,
+                max(magnitudes) * 1.1 + 0.001
+            )
+
+            plt.pause(0.01)
+
+    elif collecting:
+        try:
+            freq, mag = map(float, text.split(","))
+
+            frequencies.append(freq)
+            magnitudes.append(mag)
+
+        except ValueError:
+            pass
+
+ser.close()
 
