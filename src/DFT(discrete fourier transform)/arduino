@@ -1,1 +1,294 @@
+#include <SPI.h>
+#include <arduinoFFT.h>
 
+// Number of samples for each FFT
+const uint16_t N = 256;
+
+// Sampling frequency: 2000 samples/second
+const double Fs = 2000;
+
+// Time between samples (microseconds)
+const uint32_t samplePeriod = 500;
+
+// Arrays to store FFT data
+double vReal[N];
+double vImag[N];
+
+// Create FFT object
+ArduinoFFT<double> FFT(vReal, vImag, N, Fs);
+// =============================
+// YOUR SCHEMATIC
+// =============================
+
+const int CS_PIN   = 33;
+const int SCK_PIN  = 5;
+const int MOSI_PIN = 19;
+const int MISO_PIN = 21;
+
+
+// =============================
+// IIS3DWB REGISTERS
+// =============================
+
+const byte WHO_AM_I = 0x0F;
+const byte CTRL1_XL = 0x10;
+const byte CTRL3_C  = 0x12;
+
+const byte OUTX_L_A = 0x28;
+
+
+// SPI communication settings
+SPISettings accelSPI(1000000, MSBFIRST, SPI_MODE0);
+
+
+// =============================
+// WRITE REGISTER
+// =============================
+
+void writeRegister(byte reg, byte value)
+{
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Write command
+  SPI.transfer(reg & 0x7F);
+
+  SPI.transfer(value);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+}
+
+
+// =============================
+// READ REGISTER
+// =============================
+
+byte readRegister(byte reg)
+{
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Bit 7 = 1 means read
+  SPI.transfer(reg | 0x80);
+
+  byte value = SPI.transfer(0x00);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+
+  return value;
+}
+
+
+// =============================
+// READ X Y Z
+// =============================
+
+void readAcceleration(float &x, float &y, float &z)
+{
+  byte data[6];
+
+  SPI.beginTransaction(accelSPI);
+
+  digitalWrite(CS_PIN, LOW);
+
+  // Start reading at X low byte
+  SPI.transfer(OUTX_L_A | 0x80);
+
+  for (int i = 0; i < 6; i++)
+  {
+    data[i] = SPI.transfer(0x00);
+  }
+
+  digitalWrite(CS_PIN, HIGH);
+
+  SPI.endTransaction();
+
+
+  // Combine low + high bytes
+  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);
+  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);
+  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);
+
+
+  // ±2 g sensitivity = 0.061 mg/LSB
+  // Convert mg → g
+  const float sensitivity = 0.000061;
+
+  x = rawX * sensitivity;
+  y = rawY * sensitivity;
+  z = rawZ * sensitivity;
+}
+float calcAccel(float x, float y, float z)
+{
+  float magnitude = sqrt(x*x + y*y + z*z);
+  return magnitude;
+}
+bool processData(float accelerationValue)
+{
+  const float threshold = 0.10;
+
+  float vibration = abs(accelerationValue - 1.0);
+
+  if (vibration > threshold)
+  {
+    return true;
+  }
+  else
+  {
+    return false;
+  }
+}
+
+float movingAverage(float newAcceleration)
+{
+  const int N = 5;
+
+  static float samples[N] = {0};
+  static int index = 0;
+  static int count = 0;
+
+  samples[index] = newAcceleration;
+
+  //update index and count
+  index = (index + 1) % N;
+  if(count < N)
+    count++;
+
+  
+  //calculate average
+  float sum = 0;
+  for (int i = 0; i < count; i++)
+  {
+    sum += samples[i];
+  }
+  return sum / count;
+}
+// =============================
+// SETUP
+// =============================
+
+void setup()
+{
+  Serial.begin(115200);
+
+  delay(1000);
+
+  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
+
+  pinMode(CS_PIN, OUTPUT);
+
+  digitalWrite(CS_PIN, HIGH);
+
+  delay(100);
+
+
+  // -------------------------
+  // Check sensor identity
+  // -------------------------
+
+  byte id = readRegister(WHO_AM_I);
+
+  Serial.print("WHO_AM_I = 0x");
+  Serial.println(id, HEX);
+
+
+  if (id != 0x7B)
+  {
+    Serial.println("ERROR: IIS3DWB not detected!");
+    while (1)
+    {
+      delay(1000);
+    }
+  }
+
+  Serial.println("IIS3DWB detected!");
+
+
+  // -------------------------
+  // Block Data Update +
+  // automatic register increment
+  // -------------------------
+
+  writeRegister(CTRL3_C, 0x44);
+
+
+  // -------------------------
+  // Enable accelerometer
+  // 3 axes
+  // ±2 g
+  // -------------------------
+
+  writeRegister(0x17, 0x60);
+
+// Enable accelerometer, +/-2g, LPF2
+  writeRegister(CTRL1_XL, 0xA2);
+
+  delay(200);
+}
+
+
+// =============================
+// LOOP
+// =============================
+
+
+void loop()
+{
+  // STEP 1: Collect 256 samples
+
+  uint32_t nextSampleTime = micros();
+
+  for (int i = 0; i < N; i++)
+  {
+    // Wait for scheduled sample time
+    while ((int32_t)(micros() - nextSampleTime) < 0)
+    {
+    }
+
+    float x, y, z;
+
+    readAcceleration(x, y, z);
+
+    // Store X-axis acceleration
+    vReal[i] = x;
+    vImag[i] = 0;
+
+    nextSampleTime += samplePeriod;
+  }
+
+  // STEP 2: Remove average (DC/gravity)
+  FFT.dcRemoval();
+
+  // STEP 3: Apply Hamming window
+  FFT.windowing(
+    FFTWindow::Hamming,
+    FFTDirection::Forward
+  );
+
+  // STEP 4: Calculate FFT
+  FFT.compute(FFTDirection::Forward);
+
+  // STEP 5: Calculate magnitudes
+  FFT.complexToMagnitude();
+
+  Serial.println("FFT_START");
+
+  for (int i = 1; i < N / 2; i++)
+  {
+  // Frequency corresponding to FFT bin i
+    double frequency = i * Fs / N;
+
+  // Send frequency and magnitude as CSV
+    Serial.print(frequency, 2);
+    Serial.print(",");
+    Serial.println(vReal[i], 6);
+  }
+
+  Serial.println("FFT_END");
+}
