@@ -1,3 +1,2 @@
 ## info
-the chatted code is the complete code
-the individual code for each section explains the section
+This is the code for the accelerometer. This folder includes different data processing techniques and previous iterations of code.
