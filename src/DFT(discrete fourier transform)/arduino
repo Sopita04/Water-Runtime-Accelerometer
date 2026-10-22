@@ -260,6 +260,9 @@ void loop()
     vImag[i] = 0;
 
     nextSampleTime += samplePeriod;
+    nextSampleTime += samplePeriod;
+    float hahaFunny = movingAverage(x)
+    println(hahaFunny,4)
   }
 
   // STEP 2: Remove average (DC/gravity)
