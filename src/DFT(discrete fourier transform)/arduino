@@ -260,7 +260,6 @@ void loop()
     vImag[i] = 0;
 
     nextSampleTime += samplePeriod;
-    nextSampleTime += samplePeriod;
     float hahaFunny = movingAverage(x)
     println(hahaFunny,4)
   }
