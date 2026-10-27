@@ -240,57 +240,144 @@ void setup()
 
 void loop()
 {
-  // STEP 1: Collect 256 samples
+  static bool flowDetected = false;
+  static int consecutiveCount = 0;
+
+  // EXAMPLE THRESHOLDS - CALIBRATE THESE!
+  const double FLOW_ON_THRESHOLD = 0.012;
+  const double FLOW_OFF_THRESHOLD = 0.008;
+
+  // Accumulators for RMS calculation
+  double sumX = 0, sumY = 0, sumZ = 0;
+  double sumX2 = 0, sumY2 = 0, sumZ2 = 0;
 
   uint32_t nextSampleTime = micros();
 
+  // STEP 1: Collect 256 samples
   for (int i = 0; i < N; i++)
   {
-    // Wait for scheduled sample time
     while ((int32_t)(micros() - nextSampleTime) < 0)
     {
     }
 
     float x, y, z;
-
     readAcceleration(x, y, z);
 
-    // Store X-axis acceleration
+    // Preserve X-axis data for FFT
     vReal[i] = x;
     vImag[i] = 0;
 
+    // Accumulate acceleration measurements
+    sumX += x;
+    sumY += y;
+    sumZ += z;
+
+    sumX2 += x * x;
+    sumY2 += y * y;
+    sumZ2 += z * z;
+
     nextSampleTime += samplePeriod;
-    float hahaFunny = movingAverage(x)
-    println(hahaFunny,4)
   }
 
-  // STEP 2: Remove average (DC/gravity)
+  // STEP 2: Calculate mean accelerations
+  double meanX = sumX / N;
+  double meanY = sumY / N;
+  double meanZ = sumZ / N;
+
+  // STEP 3: Calculate combined vibration RMS
+  // Variance = E[x^2] - (E[x])^2
+
+  double varianceX = sumX2 / N - meanX * meanX;
+  double varianceY = sumY2 / N - meanY * meanY;
+  double varianceZ = sumZ2 / N - meanZ * meanZ;
+
+  double totalVariance = varianceX + varianceY + varianceZ;
+
+  // Protect against tiny negative rounding errors
+  if (totalVariance < 0)
+  {
+    totalVariance = 0;
+  }
+
+  double vibrationRMS = sqrt(totalVariance);
+
+  // STEP 4: Detect flow using hysteresis
+  if (!flowDetected)
+  {
+    if (vibrationRMS > FLOW_ON_THRESHOLD)
+    {
+      consecutiveCount++;
+
+      if (consecutiveCount >= 3)
+      {
+        flowDetected = true;
+        consecutiveCount = 0;
+      }
+    }
+    else
+    {
+      consecutiveCount = 0;
+    }
+  }
+  else
+  {
+    if (vibrationRMS < FLOW_OFF_THRESHOLD)
+    {
+      consecutiveCount++;
+
+      if (consecutiveCount >= 3)
+      {
+        flowDetected = false;
+        consecutiveCount = 0;
+      }
+    }
+    else
+    {
+      consecutiveCount = 0;
+    }
+  }
+
+  // STEP 5: Perform FFT on X-axis
   FFT.dcRemoval();
 
-  // STEP 3: Apply Hamming window
   FFT.windowing(
     FFTWindow::Hamming,
     FFTDirection::Forward
   );
 
-  // STEP 4: Calculate FFT
   FFT.compute(FFTDirection::Forward);
-
-  // STEP 5: Calculate magnitudes
   FFT.complexToMagnitude();
 
-  Serial.println("FFT_START");
+  // STEP 6: Find strongest FFT frequency
+  double peakMagnitude = 0;
+  double peakFrequency = 0;
 
   for (int i = 1; i < N / 2; i++)
   {
-  // Frequency corresponding to FFT bin i
-    double frequency = i * Fs / N;
-
-  // Send frequency and magnitude as CSV
-    Serial.print(frequency, 2);
-    Serial.print(",");
-    Serial.println(vReal[i], 6);
+    if (vReal[i] > peakMagnitude)
+    {
+      peakMagnitude = vReal[i];
+      peakFrequency = i * Fs / N;
+    }
   }
 
-  Serial.println("FFT_END");
+  // STEP 7: Print measurements
+  Serial.print("Vibration RMS: ");
+  Serial.print(vibrationRMS, 6);
+  Serial.print(" g");
+
+  Serial.print(" | Peak Frequency: ");
+  Serial.print(peakFrequency, 2);
+  Serial.print(" Hz");
+
+  Serial.print(" | Flow Status: ");
+
+  if (flowDetected)
+  {
+    Serial.println("FLOW");
+  }
+  else
+  {
+    Serial.println("NO_FLOW");
+  }
 }
