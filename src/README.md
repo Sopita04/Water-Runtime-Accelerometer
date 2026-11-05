@@ -11,3 +11,6 @@ Needed setup: arduinoFFT.h (Enrique Condes), python: python -m pip install pyser
 ## FFTPowerAndTimer
 This code calculates the power of the the vibration signal in the frequency domain in a specified frequency band. It also includes a timer of flow.
 Needed setup: arduinoFFT.h (Enrique Condes), COM 4
+
+## FFTBand
+This code does the FFT and detects flow from the frequency band 150 to 2400.
