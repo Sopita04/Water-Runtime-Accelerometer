@@ -11,16 +11,26 @@ const uint16_t N = 256;
 const double Fs = 2000.0;
 const uint32_t samplePeriod = 500;
 
-// Frequency band for flow detection
+// Frequency band
 const double BAND_LOW = 150.0;
 const double BAND_HIGH = 1000.0;
 
-// EXAMPLE THRESHOLDS - CALIBRATE THESE!
-// Units: g RMS
+// Flow thresholds (example only)
 const double FLOW_ON_THRESHOLD = 0.010;
 const double FLOW_OFF_THRESHOLD = 0.0070;
 
 const int REQUIRED_COUNT = 3;
+
+// =============================
+// REFERENCE SENSOR SETTINGS
+// =============================
+
+// Enable experimental background correction
+const bool USE_REFERENCE_CORRECTION = true;
+
+// Scaling factor for background power
+// Must be experimentally validated
+const double REF_POWER_SCALE = 1.0;
 
 // =============================
 // FFT ARRAYS
@@ -31,19 +41,26 @@ double vImag[N];
 
 ArduinoFFT<double> FFT(vReal, vImag, N, Fs);
 
-// Store all three acceleration axes
-float xSamples[N];
-float ySamples[N];
-float zSamples[N];
+// Pipe accelerometer samples
+float pipeX[N];
+float pipeY[N];
+float pipeZ[N];
 
-// Hamming window power correction
+// Reference accelerometer samples
+float refX[N];
+float refY[N];
+float refZ[N];
+
+// Hamming window correction
 double windowPower = 1.0;
 
 // =============================
 // ESP32 SPI PINS
 // =============================
 
-const int CS_PIN = 33;
+const int CS_PIPE = 33;
+const int CS_REF = 27;
+
 const int SCK_PIN = 5;
 const int MOSI_PIN = 19;
 const int MISO_PIN = 21;
@@ -58,22 +75,32 @@ const byte CTRL3_C = 0x12;
 const byte CTRL8_XL = 0x17;
 const byte OUTX_L_A = 0x28;
 
-SPISettings accelSPI(1000000, MSBFIRST, SPI_MODE0);
+SPISettings accelSPI(
+  1000000,
+  MSBFIRST,
+  SPI_MODE0
+);
 
 // =============================
 // WRITE REGISTER
 // =============================
 
-void writeRegister(byte reg, byte value)
+// csPin selects which accelerometer
+
+void writeRegister(
+  int csPin,
+  byte reg,
+  byte value
+)
 {
   SPI.beginTransaction(accelSPI);
 
-  digitalWrite(CS_PIN, LOW);
+  digitalWrite(csPin, LOW);
 
   SPI.transfer(reg & 0x7F);
   SPI.transfer(value);
 
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(csPin, HIGH);
 
   SPI.endTransaction();
 }
@@ -82,17 +109,20 @@ void writeRegister(byte reg, byte value)
 // READ REGISTER
 // =============================
 
-byte readRegister(byte reg)
+byte readRegister(
+  int csPin,
+  byte reg
+)
 {
   SPI.beginTransaction(accelSPI);
 
-  digitalWrite(CS_PIN, LOW);
+  digitalWrite(csPin, LOW);
 
   SPI.transfer(reg | 0x80);
 
   byte value = SPI.transfer(0x00);
 
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(csPin, HIGH);
 
   SPI.endTransaction();
 
@@ -103,13 +133,18 @@ byte readRegister(byte reg)
 // READ X, Y, Z ACCELERATION
 // =============================
 
-void readAcceleration(float &x, float &y, float &z)
+void readAcceleration(
+  int csPin,
+  float &x,
+  float &y,
+  float &z
+)
 {
   byte data[6];
 
   SPI.beginTransaction(accelSPI);
 
-  digitalWrite(CS_PIN, LOW);
+  digitalWrite(csPin, LOW);
 
   SPI.transfer(OUTX_L_A | 0x80);
 
@@ -118,13 +153,18 @@ void readAcceleration(float &x, float &y, float &z)
     data[i] = SPI.transfer(0x00);
   }
 
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(csPin, HIGH);
 
   SPI.endTransaction();
 
-  int16_t rawX = (int16_t)((data[1] << 8) | data[0]);
-  int16_t rawY = (int16_t)((data[3] << 8) | data[2]);
-  int16_t rawZ = (int16_t)((data[5] << 8) | data[4]);
+  int16_t rawX =
+    (int16_t)((data[1] << 8) | data[0]);
+
+  int16_t rawY =
+    (int16_t)((data[3] << 8) | data[2]);
+
+  int16_t rawZ =
+    (int16_t)((data[5] << 8) | data[4]);
 
   // +/- 2g sensitivity
   const float sensitivity = 0.000061;
@@ -135,14 +175,24 @@ void readAcceleration(float &x, float &y, float &z)
 }
 
 // =============================
-// CALCULATE HIGH-FREQUENCY POWER
+// CONFIGURE ACCELEROMETER
 // =============================
 
-// Returns mean-square acceleration (g^2)
-// between BAND_LOW and BAND_HIGH.
-//
-// Also finds the strongest frequency
-// inside the selected frequency band.
+void configureAccelerometer(int csPin)
+{
+  // Block Data Update and auto increment
+  writeRegister(csPin, CTRL3_C, 0x44);
+
+  // LPF2 bandwidth approximately 1333 Hz
+  writeRegister(csPin, CTRL8_XL, 0x40);
+
+  // Enable three axes, +/- 2g, LPF2
+  writeRegister(csPin, CTRL1_XL, 0xA2);
+}
+
+// =============================
+// CALCULATE FFT BAND POWER
+// =============================
 
 double calculateBandPower(
   const float samples[],
@@ -150,35 +200,34 @@ double calculateBandPower(
   double &peakFrequency
 )
 {
-  // STEP 1: Load samples into FFT arrays
+  // STEP 1: Load samples
   for (int i = 0; i < N; i++)
   {
     vReal[i] = samples[i];
     vImag[i] = 0;
   }
 
-  // STEP 2: Remove DC component
+  // STEP 2: Remove DC
   FFT.dcRemoval();
 
-  // STEP 3: Apply Hamming window
+  // STEP 3: Hamming window
   FFT.windowing(
     FFTWindow::Hamming,
     FFTDirection::Forward
   );
 
-  // STEP 4: Perform FFT
+  // STEP 4: FFT
   FFT.compute(FFTDirection::Forward);
 
   FFT.complexToMagnitude();
 
-  // STEP 5: Sum frequency-band power
+  // STEP 5: Sum band power
   double bandPowerSum = 0;
 
   for (int i = 1; i <= N / 2; i++)
   {
     double frequency = i * Fs / N;
 
-    // Ignore frequencies outside our band
     if (frequency < BAND_LOW ||
         frequency > BAND_HIGH)
     {
@@ -187,18 +236,14 @@ double calculateBandPower(
 
     double magnitude = vReal[i];
 
-    // Track strongest frequency in band
     if (magnitude > peakMagnitude)
     {
       peakMagnitude = magnitude;
       peakFrequency = frequency;
     }
 
-    // Convert FFT magnitude to power
     double power = magnitude * magnitude;
 
-    // Account for negative-frequency energy
-    // Nyquist bin must NOT be doubled
     if (i < N / 2)
     {
       power *= 2.0;
@@ -208,11 +253,45 @@ double calculateBandPower(
   }
 
   // STEP 6: Normalize FFT power
-  // and compensate for Hamming window
   double meanSquare =
     bandPowerSum / (N * N * windowPower);
 
   return meanSquare;
+}
+
+// =============================
+// CALCULATE THREE-AXIS POWER
+// =============================
+
+double calculateTotalPower(
+  const float xSamples[],
+  const float ySamples[],
+  const float zSamples[],
+  double &peakFrequency
+)
+{
+  double peakMagnitude = 0;
+  peakFrequency = 0;
+
+  double powerX = calculateBandPower(
+    xSamples,
+    peakMagnitude,
+    peakFrequency
+  );
+
+  double powerY = calculateBandPower(
+    ySamples,
+    peakMagnitude,
+    peakFrequency
+  );
+
+  double powerZ = calculateBandPower(
+    zSamples,
+    peakMagnitude,
+    peakFrequency
+  );
+
+  return powerX + powerY + powerZ;
 }
 
 // =============================
@@ -222,25 +301,55 @@ double calculateBandPower(
 void setup()
 {
   Serial.begin(115200);
-  Serial1.begin(115200, SERIAL_8N1, 7, 8);
+
+  Serial1.begin(
+    115200,
+    SERIAL_8N1,
+    7,
+    8
+  );
+
   delay(1000);
 
-  SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
+  // Configure separate chip selects
+  pinMode(CS_PIPE, OUTPUT);
+  pinMode(CS_REF, OUTPUT);
 
-  pinMode(CS_PIN, OUTPUT);
-  digitalWrite(CS_PIN, HIGH);
+  digitalWrite(CS_PIPE, HIGH);
+  digitalWrite(CS_REF, HIGH);
+
+  SPI.begin(
+    SCK_PIN,
+    MISO_PIN,
+    MOSI_PIN,
+    CS_PIPE
+  );
 
   delay(100);
 
-  // Check sensor identity
-  byte id = readRegister(WHO_AM_I);
+  // Check pipe sensor
+  byte idPipe = readRegister(
+    CS_PIPE,
+    WHO_AM_I
+  );
 
-  Serial.print("WHO_AM_I = 0x");
-  Serial.println(id, HEX);
+  // Check reference sensor
+  byte idRef = readRegister(
+    CS_REF,
+    WHO_AM_I
+  );
 
-  if (id != 0x7B)
+  Serial.print("Pipe WHO_AM_I: 0x");
+  Serial.println(idPipe, HEX);
+
+  Serial.print("Reference WHO_AM_I: 0x");
+  Serial.println(idRef, HEX);
+
+  if (idPipe != 0x7B || idRef != 0x7B)
   {
-    Serial.println("ERROR: IIS3DWB not detected!");
+    Serial.println(
+      "ERROR: One or both sensors not detected!"
+    );
 
     while (1)
     {
@@ -248,19 +357,13 @@ void setup()
     }
   }
 
-  Serial.println("IIS3DWB detected!");
+  Serial.println("Both IIS3DWB sensors detected!");
 
-  // Block Data Update + register increment
-  writeRegister(CTRL3_C, 0x44);
+  // Configure each accelerometer
+  configureAccelerometer(CS_PIPE);
+  configureAccelerometer(CS_REF);
 
-  // Configure LPF2 bandwidth:
-  // ODR / 20 = approximately 1333 Hz
-  writeRegister(CTRL8_XL, 0x40);
-
-  // Enable 3 axes, +/- 2g, LPF2
-  writeRegister(CTRL1_XL, 0xA2);
-
-  // Calculate Hamming window power correction
+  // Hamming window power correction
   double windowSumSquares = 0;
 
   for (int i = 0; i < N; i++)
@@ -275,9 +378,7 @@ void setup()
 
   delay(200);
 
-  Serial.println("High-frequency flow detection ready!");
-  Serial.println("Detection band: 150-1000 Hz");
-  
+  Serial.println("Dual accelerometer system ready!");
 }
 
 // =============================
@@ -289,59 +390,96 @@ void loop()
   static bool flowDetected = false;
   static int consecutiveCount = 0;
 
-  // STEP 1: Collect 256 samples
+  // =============================
+  // STEP 1: COLLECT BOTH SENSORS
+  // =============================
+
   uint32_t nextSampleTime = micros();
 
   for (int i = 0; i < N; i++)
   {
-    while ((int32_t)(micros() - nextSampleTime) < 0)
+    while (
+      (int32_t)(micros() - nextSampleTime) < 0
+    )
     {
     }
 
-    float x, y, z;
+    // Pipe accelerometer
+    readAcceleration(
+      CS_PIPE,
+      pipeX[i],
+      pipeY[i],
+      pipeZ[i]
+    );
 
-    readAcceleration(x, y, z);
-
-    xSamples[i] = x;
-    ySamples[i] = y;
-    zSamples[i] = z;
+    // Reference accelerometer
+    readAcceleration(
+      CS_REF,
+      refX[i],
+      refY[i],
+      refZ[i]
+    );
 
     nextSampleTime += samplePeriod;
   }
 
-  // STEP 2: Calculate FFT band power
-  // separately for X, Y, and Z
+  // =============================
+  // STEP 2: CALCULATE PIPE POWER
+  // =============================
 
-  double peakMagnitude = 0;
-  double peakFrequency = 0;
+  double pipePeakFrequency = 0;
 
-  double powerX = calculateBandPower(
-    xSamples, peakMagnitude, peakFrequency
+  double pipePower = calculateTotalPower(
+    pipeX,
+    pipeY,
+    pipeZ,
+    pipePeakFrequency
   );
 
-  double powerY = calculateBandPower(
-    ySamples, peakMagnitude, peakFrequency
+  // =============================
+  // STEP 3: CALCULATE REF POWER
+  // =============================
+
+  double refPeakFrequency = 0;
+
+  double refPower = calculateTotalPower(
+    refX,
+    refY,
+    refZ,
+    refPeakFrequency
   );
 
-  double powerZ = calculateBandPower(
-    zSamples, peakMagnitude, peakFrequency
-  );
+  // =============================
+  // STEP 4: COMPARE VIBRATION
+  // =============================
 
-  // STEP 3: Combine three-axis power
-  double totalBandPower =
-    powerX + powerY + powerZ;
+  double pipeRMS = sqrt(pipePower);
+  double refRMS = sqrt(refPower);
 
-  // Convert power (g^2) to RMS (g)
-  double bandRMS = sqrt(totalBandPower);
+  // Experimental background correction
+  double excessPower =
+    pipePower - REF_POWER_SCALE * refPower;
 
-  // STEP 4: Detect flow using hysteresis
+  // Avoid negative power
+  if (excessPower < 0)
+  {
+    excessPower = 0;
+  }
+
+  double excessRMS = sqrt(excessPower);
+
+  // Choose which signal controls detection
+  double detectionRMS =
+    USE_REFERENCE_CORRECTION ?
+    excessRMS : pipeRMS;
+
+  // =============================
+  // STEP 5: FLOW DETECTION
+  // =============================
 
   if (!flowDetected)
   {
-    // Currently NO_FLOW
-    // Switch ON when RMS exceeds threshold
-
-    if (bandRMS > FLOW_ON_THRESHOLD)
+    if (detectionRMS > FLOW_ON_THRESHOLD)
     {
       consecutiveCount++;
 
@@ -358,10 +496,7 @@ void loop()
   }
   else
   {
-    // Currently FLOW
-    // Switch OFF when RMS falls below threshold
-
-    if (bandRMS < FLOW_OFF_THRESHOLD)
+    if (detectionRMS < FLOW_OFF_THRESHOLD)
     {
       consecutiveCount++;
 
@@ -377,14 +512,24 @@ void loop()
     }
   }
 
-  // STEP 5: Print results
+  // =============================
+  // STEP 6: PRINT RESULTS
+  // =============================
 
-  Serial.print("Band RMS: ");
-  Serial.print(bandRMS, 6);
+  Serial.print("Pipe RMS: ");
+  Serial.print(pipeRMS, 6);
   Serial.print(" g");
 
-  Serial.print(" | Peak in Band: ");
-  Serial.print(peakFrequency, 2);
+  Serial.print(" | Ref RMS: ");
+  Serial.print(refRMS, 6);
+  Serial.print(" g");
+
+  Serial.print(" | Excess RMS: ");
+  Serial.print(excessRMS, 6);
+  Serial.print(" g");
+
+  Serial.print(" | Peak: ");
+  Serial.print(pipePeakFrequency, 2);
   Serial.print(" Hz");
 
   Serial.print(" | Flow Status: ");
@@ -392,19 +537,11 @@ void loop()
   if (flowDetected)
   {
     Serial.println("FLOW");
+    Serial1.print("FLOW\n");
   }
   else
   {
     Serial.println("NO_FLOW");
-  }
-  // Send flow status as a binary byte
-  if (flowDetected)
-  {
-    Serial1.print("FLOW\n");
-  
-  } 
-  else
-  {
     Serial1.print("NO_FLOW\n");
   }
 }
